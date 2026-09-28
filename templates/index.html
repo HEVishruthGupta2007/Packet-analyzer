@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Packet Analyzer</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
+        rel="stylesheet">
+    <style>
+        :root {
+            --base: #101823;
+            --surface: #18222f;
+            --raised: #1f2b3b;
+            --line: #2b3a4d;
+            --text: #dce4ee;
+            --muted: #7d8da3;
+            --signal: #f2a63b;
+            --tcp: #4fc3d9;
+            --udp: #9b8cf0;
+            --dns: #f2a63b;
+            --icmp: #ef7b8e;
+            --arp: #7fd1a0;
+            --ipv6: #8fa2c0;
+            --other: #64748b;
+            --sans: "IBM Plex Sans", -apple-system, Segoe UI, Roboto, sans-serif;
+            --mono: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+        }
+
+        * {
+            box-sizing: border-box
+        }
+
+        body {
+            margin: 0;
+            background: var(--base);
+            color: var(--text);
+            font: 400 15px/1.5 var(--sans);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        a {
+            color: var(--tcp)
+        }
+
+        /* ---------- control bar ---------- */
+        header {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            align-items: flex-end;
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--line);
+            background: var(--surface);
+        }
+
+        .brand h1 {
+            margin: 0;
+            font-size: 19px;
+            font-weight: 600;
+            letter-spacing: -0.01em;
+        }
+
+        .brand p {
+            margin: 2px 0 0;
+            color: var(--muted);
+            font-size: 13px
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: flex-end;
+            margin-left: auto
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 5px
+        }
+
+        .field span {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        select,
+        input[type=text] {
+            background: var(--raised);
+            color: var(--text);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font: 400 13px/1 var(--sans);
+            min-width: 190px;
+        }
+
+        input[type=text] {
+            font-family: var(--mono);
+            min-width: 230px
+        }
+
+        select:focus,
+        input:focus,
+        button:focus-visible {
+            outline: 2px solid var(--signal);
+            outline-offset: 1px;
+        }
+
+        button {
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            padding: 9px 18px;
+            font: 500 13px/1 var(--sans);
+            cursor: pointer;
+            background: var(--raised);
+            color: var(--text);
+        }
+
+        button.primary {
+            background: var(--signal);
+            border-color: var(--signal);
+            color: #1a1205
+        }
+
+        button:disabled {
+            opacity: .4;
+            cursor: not-allowed
+        }
+
+        /* ---------- live trace: the hero ---------- */
+        .trace {
+            position: relative;
+            border-bottom: 1px solid var(--line);
+            background: linear-gradient(180deg, #132030 0%, #101823 100%);
+        }
+
+        .trace canvas {
+            display: block;
+            width: 100%;
+            height: 132px
+        }
+
+        .trace .readout {
+            position: absolute;
+            top: 14px;
+            left: 24px;
+            display: flex;
+            gap: 30px;
+            align-items: baseline;
+        }
+
+        .readout .rate {
+            font: 500 34px/1 var(--mono);
+            color: var(--signal);
+            font-variant-numeric: tabular-nums;
+        }
+
+        .readout .rate small {
+            font-size: 13px;
+            color: var(--muted);
+            margin-left: 7px;
+            font-family: var(--sans)
+        }
+
+        .readout .meta {
+            font: 400 13px/1.7 var(--mono);
+            color: var(--muted)
+        }
+
+        .dot {
+            display: inline-block;
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: var(--other);
+            margin-right: 7px;
+            vertical-align: 1px;
+        }
+
+        .dot.live {
+            background: var(--signal);
+            animation: pulse 1.6s ease-in-out infinite
+        }
+
+        @keyframes pulse {
+            50% {
+                opacity: .25
+            }
+        }
+
+        @media (prefers-reduced-motion:reduce) {
+            .dot.live {
+                animation: none
+            }
+        }
+
+        /* ---------- layout ---------- */
+        main {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 300px;
+            gap: 0;
+            min-height: 60vh
+        }
+
+        .stream {
+            border-right: 1px solid var(--line);
+            min-width: 0
+        }
+
+        aside {
+            padding: 20px 22px;
+            display: flex;
+            flex-direction: column;
+            gap: 26px
+        }
+
+        /* ---------- packet table ---------- */
+        .tablewrap {
+            overflow-x: auto
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font: 400 13px/1.45 var(--mono)
+        }
+
+        thead th {
+            position: sticky;
+            top: 0;
+            background: var(--surface);
+            z-index: 1;
+            text-align: left;
+            font: 500 12px/1 var(--sans);
+            color: var(--muted);
+            padding: 11px 14px;
+            border-bottom: 1px solid var(--line);
+            white-space: nowrap;
+        }
+
+        tbody td {
+            padding: 7px 14px;
+            border-bottom: 1px solid #1c2735;
+            white-space: nowrap
+        }
+
+        tbody tr {
+            cursor: pointer
+        }
+
+        tbody tr:hover {
+            background: #1b2634
+        }
+
+        tbody tr.selected {
+            background: #22303f
+        }
+
+        td.num {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            color: var(--muted)
+        }
+
+        td.info {
+            white-space: normal;
+            color: var(--muted);
+            max-width: 340px;
+            overflow: hidden;
+            text-overflow: ellipsis
+        }
+
+        .proto {
+            font-weight: 500
+        }
+
+        .proto .dot {
+            margin-right: 6px
+        }
+
+        .empty {
+            padding: 56px 24px;
+            text-align: center;
+            color: var(--muted)
+        }
+
+        .empty strong {
+            display: block;
+            color: var(--text);
+            font-weight: 500;
+            margin-bottom: 6px
+        }
+
+        /* ---------- side panels ---------- */
+        aside h2 {
+            margin: 0 0 12px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--muted)
+        }
+
+        .stat {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font: 400 13px/1.9 var(--mono);
+            font-variant-numeric: tabular-nums
+        }
+
+        .stat span:first-child {
+            font-family: var(--sans);
+            color: var(--muted)
+        }
+
+        .mix {
+            display: flex;
+            flex-direction: column;
+            gap: 9px
+        }
+
+        .mixrow {
+            font: 400 12px/1.3 var(--mono)
+        }
+
+        .mixrow .top {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px
+        }
+
+        .bar {
+            height: 4px;
+            border-radius: 2px;
+            background: #22303f;
+            overflow: hidden
+        }
+
+        .bar i {
+            display: block;
+            height: 100%;
+            border-radius: 2px
+        }
+
+        .talkers {
+            font: 400 12px/1.9 var(--mono);
+            color: var(--muted)
+        }
+
+        .talkers div {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px
+        }
+
+        .talkers b {
+            color: var(--text);
+            font-weight: 400
+        }
+
+        /* ---------- payload drawer ---------- */
+        .drawer {
+            border-top: 1px solid var(--line);
+            background: var(--surface);
+            padding: 18px 24px;
+        }
+
+        .drawer .head {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 14px
+        }
+
+        .drawer h2 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600
+        }
+
+        .kv {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px 24px;
+            font: 400 13px/1.6 var(--mono);
+            margin-bottom: 16px
+        }
+
+        .kv div span {
+            display: block;
+            font: 400 12px/1.4 var(--sans);
+            color: var(--muted)
+        }
+
+        pre.hex {
+            margin: 0;
+            padding: 14px;
+            background: var(--base);
+            border: 1px solid var(--line);
+            border-radius: 6px;
+            overflow-x: auto;
+            font: 400 12.5px/1.75 var(--mono);
+            color: #b9c6d6;
+        }
+
+        .note {
+            color: var(--muted);
+            font-size: 13px;
+            margin: 12px 0 0
+        }
+
+        .toast {
+            margin: 0;
+            padding: 11px 24px;
+            background: #3a2318;
+            color: #ffcfa4;
+            border-bottom: 1px solid #5a3a22;
+            font-size: 13px;
+            display: none;
+        }
+
+        @media (max-width:900px) {
+            main {
+                grid-template-columns: 1fr
+            }
+
+            .stream {
+                border-right: none;
+                border-bottom: 1px solid var(--line)
+            }
+
+            .controls {
+                margin-left: 0;
+                width: 100%
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+    <header>
+        <div class="brand">
+            <h1>Network Packet Analyzer</h1>
+            <p>CodSoft Cyber Security Internship &mdash; Task 1</p>
+        </div>
+        <div class="controls">
+            <label class="field">
+                <span>Interface</span>
+                <select id="iface">
+                    <option value="">Loading…</option>
+                </select>
+            </label>
+            <label class="field">
+                <span>Capture filter</span>
+                <input id="bpf" type="text" placeholder="tcp port 443" spellcheck="false">
+            </label>
+            <button id="start" class="primary">Start capture</button>
+            <button id="stop" disabled>Stop</button>
+        </div>
+    </header>
+
+    <p class="toast" id="toast"></p>
+
+    <section class="trace">
+        <div class="readout">
+            <div>
+                <div class="rate"><span id="pps">0</span><small>packets/sec</small></div>
+            </div>
+            <div class="meta">
+                <div><span class="dot" id="statusdot"></span><span id="status">Idle</span></div>
+                <div id="meta">No interface selected</div>
+            </div>
+        </div>
+        <canvas id="chart" height="132"></canvas>
+    </section>
+
+    <main>
+        <div class="stream">
+            <div class="tablewrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="text-align:right">#</th>
+                            <th>Time</th>
+                            <th>Protocol</th>
+                            <th>Source</th>
+                            <th>Destination</th>
+                            <th style="text-align:right">Bytes</th>
+                            <th>Info</th>
+                        </tr>
+                    </thead>
+                    <tbody id="rows"></tbody>
+                </table>
+            </div>
+            <div class="empty" id="empty">
+                <strong>Nothing captured yet</strong>
+                Pick the interface you are browsing on, then start the capture.
+            </div>
+        </div>
+
+        <aside>
+            <section>
+                <h2>Capture</h2>
+                <div class="stat"><span>Packets</span><span id="s-packets">0</span></div>
+                <div class="stat"><span>Data</span><span id="s-bytes">0 B</span></div>
+                <div class="stat"><span>Average size</span><span id="s-avg">0 B</span></div>
+                <div class="stat"><span>Elapsed</span><span id="s-elapsed">0 s</span></div>
+            </section>
+            <section>
+                <h2>Protocol mix</h2>
+                <div class="mix" id="mix">
+                    <p class="note">Waiting for traffic.</p>
+                </div>
+            </section>
+            <section>
+                <h2>Busiest sources</h2>
+                <div class="talkers" id="talkers">
+                    <p class="note">Waiting for traffic.</p>
+                </div>
+            </section>
+            <section>
+                <h2>Services contacted</h2>
+                <div class="talkers" id="services">
+                    <p class="note">Waiting for traffic.</p>
+                </div>
+            </section>
+        </aside>
+    </main>
+
+    <section class="drawer" id="drawer" style="display:none">
+        <div class="head">
+            <h2>Packet <span id="d-id"></span></h2>
+            <button id="d-close">Close</button>
+        </div>
+        <div class="kv" id="d-kv"></div>
+        <pre class="hex" id="d-hex"></pre>
+        <p class="note" id="d-note"></p>
+    </section>
+
+    <script>
+        const PROTO_COLOURS = {
+            TCP: 'var(--tcp)', UDP: 'var(--udp)', DNS: 'var(--dns)', ICMP: 'var(--icmp)',
+            ARP: 'var(--arp)', IPv6: 'var(--ipv6)', Other: 'var(--other)'
+        };
+        const colourFor = p => PROTO_COLOURS[p] || 'var(--other)';
+
+        const MAX_ROWS = 300;        // keep the DOM light
+        const HISTORY = 90;         // seconds of trace shown
+        let lastId = 0;
+        let lastTotal = 0;
+        let history = new Array(HISTORY).fill(0);
+        let selectedId = null;
+        let timer = null;
+
+        const $ = id => document.getElementById(id);
+
+        function bytes(n) {
+            if (n < 1024) return n + ' B';
+            if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+            return (n / 1048576).toFixed(2) + ' MB';
+        }
+
+        function toast(message) {
+            const el = $('toast');
+            if (!message) { el.style.display = 'none'; return; }
+            el.textContent = message;
+            el.style.display = 'block';
+        }
+
+        /* ---------- interfaces ---------- */
+        async function loadInterfaces() {
+            try {
+                const list = await (await fetch('/api/interfaces')).json();
+                const sel = $('iface');
+                sel.innerHTML = '<option value="">Default interface</option>';
+                list.forEach(i => {
+                    const o = document.createElement('option');
+                    o.value = i.name;
+                    o.textContent = i.description + (i.ip ? '  ·  ' + i.ip : '');
+                    sel.appendChild(o);
+                });
+            } catch (e) {
+                toast('Could not list interfaces. Is the server still running?');
+            }
+        }
+
+        /* ---------- start / stop ---------- */
+        async function start() {
+            toast('');
+            const body = JSON.stringify({ interface: $('iface').value, bpf: $('bpf').value });
+            const res = await fetch('/api/start', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body
+            });
+            const data = await res.json();
+            if (!data.ok) { toast(data.message); return; }
+            lastId = 0; lastTotal = 0; selectedId = null;
+            history = new Array(HISTORY).fill(0);
+            $('rows').innerHTML = '';
+            $('drawer').style.display = 'none';
+            $('start').disabled = true;
+            $('stop').disabled = false;
+            if (!timer) timer = setInterval(poll, 1000);
+            poll();
+        }
+
+        async function stop() {
+            const data = await (await fetch('/api/stop', { method: 'POST' })).json();
+            $('start').disabled = false;
+            $('stop').disabled = true;
+            if (!data.ok) toast(data.message);
+            poll();
+        }
+
+        /* ---------- polling ---------- */
+        async function poll() {
+            let state;
+            try {
+                state = await (await fetch('/api/state?since=' + lastId)).json();
+            } catch (e) { return; }
+
+            // packets/sec = how many arrived since the previous tick
+            const pps = Math.max(0, state.total_packets - lastTotal);
+            lastTotal = state.total_packets;
+            if (state.running) {
+                history.push(pps); history.shift();
+            }
+            $('pps').textContent = state.running ? pps : 0;
+            drawChart();
+
+            $('statusdot').className = 'dot' + (state.running ? ' live' : '');
+            $('status').textContent = state.running ? 'Capturing' : 'Stopped';
+            $('meta').textContent = state.running || state.total_packets
+                ? (state.interface || 'default interface') +
+                (state.bpf ? '  ·  filter: ' + state.bpf : '  ·  no filter')
+                : 'No interface selected';
+
+            if (state.packets.length) {
+                lastId = state.latest_id;
+                addRows(state.packets);
+                $('empty').style.display = 'none';
+            }
+
+            $('s-packets').textContent = state.total_packets.toLocaleString();
+            $('s-bytes').textContent = bytes(state.total_bytes);
+            $('s-avg').textContent = state.total_packets
+                ? bytes(Math.round(state.total_bytes / state.total_packets)) : '0 B';
+            $('s-elapsed').textContent = state.elapsed + ' s';
+
+            renderMix(state.protocols, state.total_packets);
+            renderList('talkers', state.top_sources);
+            renderList('services', state.services);
+        }
+
+        /* ---------- table ---------- */
+        function addRows(packets) {
+            const tbody = $('rows');
+            const frag = document.createDocumentFragment();
+            packets.forEach(p => {
+                const tr = document.createElement('tr');
+                tr.dataset.id = p.id;
+                if (p.id === selectedId) tr.className = 'selected';
+                const src = p.src_port ? p.src_ip + ':' + (p.src_service || p.src_port) : p.src_ip;
+                const dst = p.dst_port ? p.dst_ip + ':' + (p.dst_service || p.dst_port) : p.dst_ip;
+                tr.innerHTML =
+                    '<td class="num">' + p.id + '</td>' +
+                    '<td>' + p.time + '</td>' +
+                    '<td class="proto" style="color:' + colourFor(p.protocol) + '">' +
+                    '<span class="dot" style="background:' + colourFor(p.protocol) + '"></span>' +
+                    p.protocol + '</td>' +
+                    '<td>' + src + '</td>' +
+                    '<td>' + dst + '</td>' +
+                    '<td class="num">' + p.length + '</td>' +
+                    '<td class="info">' + (p.detail || '') + '</td>';
+                tr.addEventListener('click', () => showPacket(p.id));
+                frag.appendChild(tr);
+            });
+            tbody.insertBefore(frag, tbody.firstChild);   // newest on top
+            while (tbody.children.length > MAX_ROWS) tbody.removeChild(tbody.lastChild);
+        }
+
+        /* ---------- side panels ---------- */
+        function renderMix(protocols, total) {
+            const box = $('mix');
+            if (!protocols.length) { box.innerHTML = '<p class="note">Waiting for traffic.</p>'; return; }
+            box.innerHTML = protocols.map(([name, n]) => {
+                const pct = total ? (n / total * 100) : 0;
+                const c = colourFor(name);
+                return '<div class="mixrow">' +
+                    '<div class="top"><span style="color:' + c + '">' + name + '</span>' +
+                    '<span>' + n + '  ' + pct.toFixed(1) + '%</span></div>' +
+                    '<div class="bar"><i style="width:' + pct + '%;background:' + c + '"></i></div>' +
+                    '</div>';
+            }).join('');
+        }
+
+        function renderList(id, items) {
+            const box = $(id);
+            if (!items.length) { box.innerHTML = '<p class="note">Waiting for traffic.</p>'; return; }
+            box.innerHTML = items.map(([label, n]) =>
+                '<div><b>' + label + '</b><span>' + n + '</span></div>').join('');
+        }
+
+        /* ---------- payload drawer ---------- */
+        function hexdump(hex) {
+            const bytesArr = hex.match(/.{1,2}/g) || [];
+            let out = '';
+            for (let i = 0; i < bytesArr.length; i += 16) {
+                const slice = bytesArr.slice(i, i + 16);
+                const hexPart = slice.join(' ').padEnd(47, ' ');
+                const ascii = slice.map(h => {
+                    const v = parseInt(h, 16);
+                    return (v >= 32 && v < 127) ? String.fromCharCode(v) : '.';
+                }).join('');
+                out += i.toString(16).padStart(4, '0') + '  ' + hexPart + '  ' + ascii + '\n';
+            }
+            return out;
+        }
+
+        async function showPacket(id) {
+            selectedId = id;
+            document.querySelectorAll('#rows tr').forEach(tr =>
+                tr.classList.toggle('selected', Number(tr.dataset.id) === id));
+            const res = await fetch('/api/packet/' + id);
+            if (!res.ok) {
+                $('drawer').style.display = 'block';
+                $('d-id').textContent = id;
+                $('d-kv').innerHTML = '';
+                $('d-hex').textContent = '';
+                $('d-note').textContent = 'This packet has scrolled out of the buffer.';
+                return;
+            }
+            const p = await res.json();
+            $('drawer').style.display = 'block';
+            $('d-id').textContent = p.id;
+            const fields = [
+                ['Captured at', p.time],
+                ['Protocol', p.protocol],
+                ['Source', p.src_port ? p.src_ip + ':' + p.src_port : p.src_ip],
+                ['Destination', p.dst_port ? p.dst_ip + ':' + p.dst_port : p.dst_ip],
+                ['Total length', p.length + ' bytes'],
+                ['TTL', p.ttl === null ? '—' : p.ttl],
+                ['TCP flags', p.flags || '—'],
+                ['Payload', p.payload_len ? p.payload_len + ' bytes' : 'none']
+            ];
+            $('d-kv').innerHTML = fields.map(([k, v]) =>
+                '<div><span>' + k + '</span>' + v + '</div>').join('');
+            $('d-hex').textContent = p.payload_hex
+                ? hexdump(p.payload_hex)
+                : 'This packet carries no application payload — it is control traffic only.';
+            const encrypted = p.dst_port === 443 || p.src_port === 443;
+            $('d-note').textContent = encrypted && p.payload_len
+                ? 'Unreadable bytes here are TLS encryption working as intended. Capture DNS (port 53) or plain HTTP to see readable payloads.'
+                : '';
+            $('drawer').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+
+        /* ---------- live trace ---------- */
+        function drawChart() {
+            const canvas = $('chart');
+            const ratio = window.devicePixelRatio || 1;
+            const w = canvas.clientWidth, h = 132;
+            if (canvas.width !== w * ratio) {
+                canvas.width = w * ratio; canvas.height = h * ratio;
+            }
+            const ctx = canvas.getContext('2d');
+            ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+            ctx.clearRect(0, 0, w, h);
+
+            const peak = Math.max(10, ...history);
+            const stepX = w / (HISTORY - 1);
+            const y = v => h - 12 - (v / peak) * (h - 30);
+
+            // three quiet reference lines, labelled with the packet rate they mark
+            ctx.strokeStyle = '#22303f'; ctx.lineWidth = 1;
+            ctx.fillStyle = '#4e5f75';
+            ctx.font = '11px ui-monospace, monospace';
+            [0.5, 1].forEach(f => {
+                const yy = Math.round(y(peak * f)) + 0.5;
+                ctx.beginPath(); ctx.moveTo(0, yy); ctx.lineTo(w, yy); ctx.stroke();
+                ctx.fillText(Math.round(peak * f), w - 34, yy - 5);
+            });
+
+            // filled area under the trace
+            ctx.beginPath();
+            ctx.moveTo(0, h);
+            history.forEach((v, i) => ctx.lineTo(i * stepX, y(v)));
+            ctx.lineTo(w, h);
+            ctx.closePath();
+            const grad = ctx.createLinearGradient(0, 0, 0, h);
+            grad.addColorStop(0, 'rgba(242,166,59,0.30)');
+            grad.addColorStop(1, 'rgba(242,166,59,0)');
+            ctx.fillStyle = grad; ctx.fill();
+
+            // the trace itself
+            ctx.beginPath();
+            history.forEach((v, i) => i ? ctx.lineTo(i * stepX, y(v)) : ctx.moveTo(0, y(v)));
+            ctx.strokeStyle = '#f2a63b'; ctx.lineWidth = 1.6; ctx.stroke();
+
+            // leading marker
+            const last = history[history.length - 1];
+            ctx.beginPath();
+            ctx.arc(w - 1, y(last), 3, 0, Math.PI * 2);
+            ctx.fillStyle = '#f2a63b'; ctx.fill();
+        }
+
+        /* ---------- wire it up ---------- */
+        $('start').addEventListener('click', start);
+        $('stop').addEventListener('click', stop);
+        $('d-close').addEventListener('click', () => {
+            $('drawer').style.display = 'none'; selectedId = null;
+            document.querySelectorAll('#rows tr').forEach(tr => tr.classList.remove('selected'));
+        });
+        window.addEventListener('resize', drawChart);
+
+        loadInterfaces();
+        drawChart();
+        poll();
+        timer = setInterval(poll, 1000);
+    </script>
+</body>
+
+</html>
